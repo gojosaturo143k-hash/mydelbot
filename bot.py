@@ -33,6 +33,11 @@ async def setup_bot_commands(application: Application) -> None:
     await application.bot.set_my_commands(commands)
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global error handler to catch exceptions and prevent bot crashes."""
+    logger.error(f"Exception while handling an update: {context.error}", exc_info=context.error)
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles the /start command. Works only in private chats."""
     if update.effective_chat.type != "private":
@@ -70,23 +75,22 @@ async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Fetch all stored messages for this user in this group
     messages: List[Tuple[int, int, int]] = get_messages(chat.id, user.id)
 
-    if not messages:
-        await update.message.reply_text("Done ✅")
-        return
-
-    # Delete every tracked message
-    for msg_chat_id, msg_user_id, msg_message_id in messages:
-        try:
-            await context.bot.delete_message(
-                chat_id=msg_chat_id, message_id=msg_message_id
-            )
-        except TelegramError:
-            # Ignore deletion errors silently (e.g., message already deleted, or lack of permissions)
-            pass
-
-    # Remove all deleted IDs from the database
+    # Remove all deleted IDs from the database BEFORE attempting deletion
+    # This ensures the /delmy command itself isn't deleted along with the tracked messages
     clear_messages(chat.id, user.id)
 
+    # Delete every tracked message
+    if messages:
+        for msg_chat_id, msg_user_id, msg_message_id in messages:
+            try:
+                await context.bot.delete_message(
+                    chat_id=msg_chat_id, message_id=msg_message_id
+                )
+            except TelegramError:
+                # Ignore deletion errors silently (e.g., message already deleted, or lack of permissions)
+                pass
+
+    # Safely reply now that we know the /delmy command message wasn't deleted
     await update.message.reply_text("Done ✅")
 
 
@@ -96,14 +100,11 @@ async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     message = update.message
 
-    # Ignore private chats and commands
+    # Ignore private chats
     if chat.type not in GROUP_CHAT_TYPES:
         return
     
     if message is None or message.text is None:
-        return
-        
-    if message.text.startswith("/"):
         return
 
     # Save to database
@@ -122,11 +123,16 @@ def create_bot_application() -> Application:
         .build()
     )
 
-    # Register handlers
+    # Register global error handler
+    application.add_error_handler(error_handler)
+
+    # Register command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("delmy", delmy_command))
     
-    # Track all non-command text messages
+    # Track all non-command text messages. 
+    # Note: ~filters.COMMAND is implicitly handled by registering CommandHandlers first,
+    # but we keep it explicit for safety.
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, track_message)
     )
