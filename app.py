@@ -3,6 +3,7 @@ Flask web server for the DeleteMy Bot.
 Serves HTTP requests for Render health checks while running the Telegram bot in a background thread.
 """
 
+import asyncio
 import threading
 import logging
 import os
@@ -25,15 +26,33 @@ def index() -> str:
     return "DeleteMy Bot Running!"
 
 
-def run_bot() -> None:
-    """Initializes the database and runs the Telegram bot using polling."""
+async def async_run_bot() -> None:
+    """Async wrapper to initialize the database and run the Telegram bot."""
     try:
         init_db()
         application = create_bot_application()
         logger.info("Starting Telegram bot polling...")
-        application.run_polling(drop_pending_updates=True)
+        # Initialize the application before polling
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling(drop_pending_updates=True)
+        
+        # Keep the thread alive indefinitely
+        while True:
+            await asyncio.sleep(3600)
+            
     except Exception as e:
         logger.error(f"Failed to start or run the bot: {e}")
+
+
+def run_bot() -> None:
+    """Creates a new event loop and runs the async bot loop inside the thread."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(async_run_bot())
+    finally:
+        loop.close()
 
 
 # Start the bot in a separate background thread when the module is loaded
