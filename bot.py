@@ -75,8 +75,9 @@ async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Fetch all stored messages for this user in this group
     messages: List[Tuple[int, int, int]] = get_messages(chat.id, user.id)
 
-    # Remove all deleted IDs from the database BEFORE attempting deletion
-    # This ensures the /delmy command itself isn't deleted along with the tracked messages
+    # Remove records from database BEFORE deletion loop.
+    # This prevents the bot from accidentally deleting the /delmy command itself 
+    # if Telegram's group privacy settings hid other messages from the bot.
     clear_messages(chat.id, user.id)
 
     # Delete every tracked message
@@ -87,11 +88,19 @@ async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     chat_id=msg_chat_id, message_id=msg_message_id
                 )
             except TelegramError:
-                # Ignore deletion errors silently (e.g., message already deleted, or lack of permissions)
+                # Ignore deletion errors silently (e.g. message already deleted by privacy settings)
                 pass
 
-    # Safely reply now that we know the /delmy command message wasn't deleted
-    await update.message.reply_text("Done ✅")
+    # Use send_message instead of reply_text. 
+    # If the group has "Delete Messages" privacy enabled, Telegram might auto-delete 
+    # the /delmy command. reply_text would crash with "Message to be replied not found".
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id, 
+            text="Done ✅"
+        )
+    except TelegramError as e:
+        logger.error(f"Failed to send completion message: {e}")
 
 
 async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -130,9 +139,7 @@ def create_bot_application() -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("delmy", delmy_command))
     
-    # Track all non-command text messages. 
-    # Note: ~filters.COMMAND is implicitly handled by registering CommandHandlers first,
-    # but we keep it explicit for safety.
+    # Track all non-command text messages
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, track_message)
     )
