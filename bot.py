@@ -1,6 +1,7 @@
 """
 Telegram Bot logic for the DeleteMy Bot.
 Handles message tracking, /start, and /delmy commands.
+Now tracks and deletes Text, Stickers, and all Media types.
 """
 
 import logging
@@ -45,7 +46,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     reply_text = (
         "👋 Welcome!\n\n"
-        "I can delete your own tracked messages from groups.\n\n"
+        "I can delete your own tracked messages (Text, Media, Stickers) from groups.\n\n"
         "Command:\n"
         "/delmy"
     )
@@ -76,8 +77,6 @@ async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     messages: List[Tuple[int, int, int]] = get_messages(chat.id, user.id)
 
     # Remove records from database BEFORE deletion loop.
-    # This prevents the bot from accidentally deleting the /delmy command itself 
-    # if Telegram's group privacy settings hid other messages from the bot.
     clear_messages(chat.id, user.id)
 
     # Delete every tracked message
@@ -88,12 +87,10 @@ async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     chat_id=msg_chat_id, message_id=msg_message_id
                 )
             except TelegramError:
-                # Ignore deletion errors silently (e.g. message already deleted by privacy settings)
+                # Ignore deletion errors silently
                 pass
 
-    # Use send_message instead of reply_text. 
-    # If the group has "Delete Messages" privacy enabled, Telegram might auto-delete 
-    # the /delmy command. reply_text would crash with "Message to be replied not found".
+    # Use send_message instead of reply_text to prevent crashes if Telegram auto-deletes the command
     try:
         await context.bot.send_message(
             chat_id=chat.id, 
@@ -104,7 +101,7 @@ async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tracks normal text messages sent in groups or supergroups."""
+    """Tracks text, stickers, and all media messages sent in groups or supergroups."""
     chat = update.effective_chat
     user = update.effective_user
     message = update.message
@@ -113,7 +110,12 @@ async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if chat.type not in GROUP_CHAT_TYPES:
         return
     
-    if message is None or message.text is None:
+    # Safety check: Some updates (like users joining/leaving) don't have a message object
+    if message is None:
+        return
+
+    # Safety check: Ensure the message has an ID (Service messages usually don't have one)
+    if message.message_id is None:
         return
 
     # Save to database
@@ -139,9 +141,12 @@ def create_bot_application() -> Application:
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("delmy", delmy_command))
     
-    # Track all non-command text messages
+    # Updated Filter: 
+    # - filters.ALL picks up EVERYTHING (Text, Stickers, Photos, Videos, Audio, Documents, Voice, etc.)
+    # - ~filters.COMMAND ensures it ignores /start, /delmy, etc.
+    # Note: We handle service messages (join/leave) safely inside the track_message function by checking message_id
     application.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, track_message)
+        MessageHandler(filters.ALL & ~filters.COMMAND, track_message)
     )
 
     # Set up commands menu
