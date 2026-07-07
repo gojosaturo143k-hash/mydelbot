@@ -41,7 +41,7 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 def get_mention(user_id: int, username: Optional[str]) -> str:
-    """Always returns a clickable mention. Shows @username or 'User (ID)'."""
+    """Returns a clickable mention. @username or User (ID)."""
     if username:
         return f"@{username}"
     return f"<a href='tg://user?id={user_id}'>User ({user_id})</a>"
@@ -68,7 +68,6 @@ def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[d
             target_id = get_user_by_username(target_username)
 
     if target_id:
-        # If we got ID via reply but username was None, try fetching from DB
         if not target_username:
             target_username = get_username(target_id)
         return {"id": target_id, "username": target_username}
@@ -114,19 +113,17 @@ async def mute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat = update.effective_chat
     if chat.type not in GROUP_CHAT_TYPES: return
 
-    admin = update.effective_user
     target = get_target(update, context)
-
     if not target:
         return await update.message.reply_text("Reply to a message or provide @username/ID.")
 
-    admin_mention = get_mention(admin.id, admin.username)
     target_mention = get_mention(target["id"], target["username"])
 
     try:
         mute_perms = ChatPermissions(can_send_messages=False)
         await context.bot.restrict_chat_member(chat_id=chat.id, user_id=target["id"], permissions=mute_perms)
-        await update.message.reply_text(f"🔇 {target_mention} has been muted by {admin_mention}", parse_mode="HTML")
+        # Admin ka mention hata diya, sirf target mention hoga
+        await update.message.reply_text(f"🔇 {target_mention} has been muted", parse_mode="HTML")
     except TelegramError as e:
         logger.error(f"Mute failed: {e}")
         await update.message.reply_text("Failed to mute. Make sure I am an admin.")
@@ -136,17 +133,13 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat = update.effective_chat
     if chat.type not in GROUP_CHAT_TYPES: return
 
-    admin = update.effective_user
     target = get_target(update, context)
-
     if not target:
         return await update.message.reply_text("Reply to a message or provide @username/ID.")
 
-    admin_mention = get_mention(admin.id, admin.username)
     target_mention = get_mention(target["id"], target["username"])
 
     try:
-        # FIXED: can_send_media_messages MUST be True if can_send_other_messages is True
         unmute_perms = ChatPermissions(
             can_send_messages=True,
             can_send_media_messages=True, 
@@ -158,7 +151,7 @@ async def unmute_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             can_pin_messages=False
         )
         await context.bot.restrict_chat_member(chat_id=chat.id, user_id=target["id"], permissions=unmute_perms)
-        await update.message.reply_text(f"🔊 {target_mention} has been unmuted by {admin_mention}", parse_mode="HTML")
+        await update.message.reply_text(f"🔊 {target_mention} has been unmuted", parse_mode="HTML")
     except TelegramError as e:
         logger.error(f"Unmute failed: {e}")
         await update.message.reply_text("Failed to unmute. Make sure I am an admin.")
@@ -168,18 +161,15 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat = update.effective_chat
     if chat.type not in GROUP_CHAT_TYPES: return
 
-    admin = update.effective_user
     target = get_target(update, context)
-
     if not target:
         return await update.message.reply_text("Reply to a message or provide @username/ID.")
 
-    admin_mention = get_mention(admin.id, admin.username)
     target_mention = get_mention(target["id"], target["username"])
 
     try:
         await context.bot.ban_chat_member(chat_id=chat.id, user_id=target["id"])
-        await update.message.reply_text(f"🚫 {target_mention} has been banned by {admin_mention}", parse_mode="HTML")
+        await update.message.reply_text(f"🚫 {target_mention} has been banned", parse_mode="HTML")
     except TelegramError as e:
         logger.error(f"Ban failed: {e}")
         await update.message.reply_text("Failed to ban. Make sure I am an admin.")
@@ -189,24 +179,19 @@ async def unban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     chat = update.effective_chat
     if chat.type not in GROUP_CHAT_TYPES: return
 
-    admin = update.effective_user
     target = get_target(update, context)
-
     if not target:
         return await update.message.reply_text("Reply to a message or provide @username/ID.")
 
-    admin_mention = get_mention(admin.id, admin.username)
     target_mention = get_mention(target["id"], target["username"])
 
     try:
-        # FIXED: Check if user is actually banned before calling unban
         member = await context.bot.get_chat_member(chat_id=chat.id, user_id=target["id"])
         
         if member.status == "banned":
             await context.bot.unban_chat_member(chat_id=chat.id, user_id=target["id"], only_if_banned=True)
-            await update.message.reply_text(f"✅ {target_mention} has been unbanned by {admin_mention}", parse_mode="HTML")
+            await update.message.reply_text(f"✅ {target_mention} has been unbanned", parse_mode="HTML")
         else:
-            # If user is not banned, don't touch them, just send message
             await update.message.reply_text(f"❌ {target_mention} is not banned in this group.", parse_mode="HTML")
             
     except TelegramError as e:
@@ -222,7 +207,6 @@ async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if chat.type not in GROUP_CHAT_TYPES: return
     if message is None or message.message_id is None: return
 
-    # Cache username for future mentions
     if user:
         save_username(user.id, user.username)
 
