@@ -7,6 +7,7 @@ import asyncio
 import threading
 import logging
 import os
+import atexit
 
 from flask import Flask
 
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 # Initialize Flask app
 app = Flask(__name__)
 
+# Global variable to hold the application instance for safe shutdown
+bot_application = None
+bot_thread = None
+
 
 @app.route("/", methods=["GET"])
 def index() -> str:
@@ -28,14 +33,15 @@ def index() -> str:
 
 async def async_run_bot() -> None:
     """Async wrapper to initialize the database and run the Telegram bot."""
+    global bot_application
     try:
         init_db()
-        application = create_bot_application()
+        bot_application = create_bot_application()
         logger.info("Starting Telegram bot polling...")
-        # Initialize the application before polling
-        await application.initialize()
-        await application.start()
-        await application.updater.start_polling(drop_pending_updates=True)
+        
+        await bot_application.initialize()
+        await bot_application.start()
+        await bot_application.updater.start_polling(drop_pending_updates=True)
         
         # Keep the thread alive indefinitely
         while True:
@@ -55,18 +61,48 @@ def run_bot() -> None:
         loop.close()
 
 
+async def shutdown_bot() -> None:
+    """Safely stops the bot to prevent 'Conflict: terminated by other getUpdates' errors."""
+    global bot_application
+    if bot_application:
+        logger.info("Shutting down bot gracefully...")
+        try:
+            await bot_application.updater.stop_polling()
+            await bot_application.stop()
+            await bot_application.shutdown()
+        except Exception as e:
+            logger.error(f"Error during bot shutdown: {e}")
+
+
+def trigger_shutdown() -> None:
+    """Triggers the async shutdown in the bot's event loop."""
+    if bot_thread and bot_thread.is_alive():
+        try:
+            # Get the loop running inside the bot thread and schedule the shutdown
+            loop = bot_thread._loop
+            if loop and loop.is_running():
+                asyncio.run_coroutine_threadsafe(shutdown_bot(), loop)
+        except Exception as e:
+            logger.error(f"Could not trigger graceful shutdown: {e}")
+
+
+# Register the shutdown function so Render restarts cleanly
+atexit.register(trigger_shutdown)
+
+
 # Start the bot in a separate background thread when the module is loaded
 if config.BOT_TOKEN:
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
+    
+    # Attach the loop reference to the thread so we can shut it down later
+    import time
+    time.sleep(1) # Give thread a second to start and create the loop
 else:
-    # Render runs 'python app.py' during the build phase without environment variables.
-    # We must keep the script alive here so the build verification succeeds.
     if os.environ.get("RENDER"):
         logger.warning("BOT_TOKEN not set. Running in dummy mode for Render build check...")
     else:
         logger.warning("BOT_TOKEN not provided. Bot thread not started.")
 
-# Ensures Flask runs when executed directly (e.g., during Render's build check)
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
