@@ -22,6 +22,7 @@ def init_db() -> None:
     """Initializes the database and creates tables."""
     try:
         with get_connection() as conn:
+            # Messages table
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS messages (
                     chat_id INTEGER, user_id INTEGER, message_id INTEGER
@@ -29,9 +30,17 @@ def init_db() -> None:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_user ON messages (chat_id, user_id)")
             
+            # Users table to cache usernames
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY, username TEXT
+                )"""
+            )
+            
+            # Punished users table
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS punished_users (
+                    chat_id INTEGER, user_id INTEGER, PRIMARY KEY (chat_id, user_id)
                 )"""
             )
             conn.commit()
@@ -86,12 +95,34 @@ def get_username(user_id: int) -> Optional[str]:
         return None
 
 
-def get_user_by_username(username: str) -> Optional[int]:
-    """Finds user ID from database using username."""
+def punish_user(chat_id: int, user_id: int) -> None:
+    """Adds a user to the punished list."""
     try:
         with get_connection() as conn:
-            cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (username.lower(),))
-            row = cursor.fetchone()
-            return row[0] if row else None
+            conn.execute("INSERT OR IGNORE INTO punished_users VALUES (?, ?)", (chat_id, user_id))
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error punishing user: {e}")
+
+
+def unpunish_user(chat_id: int, user_id: int) -> None:
+    """Removes a user from the punished list."""
+    try:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM punished_users WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error unpunishing user: {e}")
+
+
+def is_punished(chat_id: int, user_id: int) -> bool:
+    """Checks if a user is currently in the punished list."""
+    try:
+        with get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM punished_users WHERE chat_id = ? AND user_id = ?", 
+                (chat_id, user_id)
+            )
+            return cursor.fetchone() is not None
     except sqlite3.Error:
-        return None
+        return False
