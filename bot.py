@@ -1,6 +1,5 @@
 """
 Telegram Bot logic for the DeleteMy Bot.
-Handles message tracking, /delmy, and the /punish & /unpunish system.
 """
 
 import logging
@@ -28,7 +27,6 @@ GROUP_CHAT_TYPES = ["group", "supergroup"]
 
 
 async def setup_bot_commands(application: Application) -> None:
-    """Sets up bot commands UI."""
     commands = [
         BotCommand("delmy", "Delete all your tracked messages"),
         BotCommand("punish", "Silently delete all future messages of a user"),
@@ -38,36 +36,30 @@ async def setup_bot_commands(application: Application) -> None:
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Global error handler."""
     logger.error(f"Exception: {context.error}", exc_info=context.error)
 
 
 def get_mention(user_id: int, username: Optional[str]) -> str:
-    """Returns a clickable mention."""
     if username:
         return f"@{username}"
     return f"<a href='tg://user?id={user_id}'>User ({user_id})</a>"
 
 
 def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
-    """Gets target ID and Username from Reply or Text."""
     target_id = None
     target_username = None
 
-    # 1. Check Reply
     if update.message.reply_to_message and update.message.reply_to_message.from_user:
         target_user = update.message.reply_to_message.from_user
         target_id = target_user.id
         target_username = target_user.username
         
-    # 2. Check Text (@username or ID)
     elif context.args and len(context.args) > 0:
         arg = context.args[0]
         if arg.lstrip('-').isdigit():
             target_id = int(arg)
         elif arg.startswith("@"):
             target_username = arg[1:]
-            # Search in DB
             try:
                 with __import__('database').get_connection() as conn:
                     cursor = conn.execute("SELECT user_id FROM users WHERE username = ?", (target_username.lower(),))
@@ -85,7 +77,6 @@ def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[d
 
 
 async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Checks if a user is an admin or creator in the group."""
     try:
         member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
         return member.status in ["administrator", "creator"]
@@ -138,16 +129,17 @@ async def punish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not target:
         return await update.message.reply_text("Reply to a user's message or provide @username/ID to punish them.")
 
-    # Safety: Do not punish admins
-    if await is_admin(chat.id, target["id"], context):
-        return await update.message.reply_text("Cannot punish an admin.")
+    # --- OWNER EXCLUSIVE LOGIC ---
+    # Agar target admin hai, toh sirf OWNER (Tum) hi usse punish kar sake
+    is_target_admin = await is_admin(chat.id, target["id"], context)
+    if is_target_admin:
+        if not config.OWNER_ID or str(admin.id) != str(config.OWNER_ID):
+            return await update.message.reply_text("⛔ You cannot punish an admin.")
 
     target_mention = get_mention(target["id"], target["username"])
 
-    # Add to punished list
     punish_user(chat.id, target["id"])
 
-    # Delete the message they sent that the admin replied to
     if update.message.reply_to_message:
         try:
             await update.message.reply_to_message.delete()
@@ -171,7 +163,6 @@ async def unpunish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     target_mention = get_mention(target["id"], target["username"])
 
-    # Remove from punished list
     unpunish_user(chat.id, target["id"])
 
     await update.message.reply_text(f"✅ {target_mention} has been unpunished.", parse_mode="HTML")
@@ -185,20 +176,17 @@ async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if chat.type not in GROUP_CHAT_TYPES: return
     if message is None or message.message_id is None: return
 
-    # Cache username for future mentions
     if user:
         save_username(user.id, user.username)
 
-    # --- THE PUNISH SYSTEM LOGIC ---
-    # If the user is punished, delete their message instantly and DO NOT save it
+    # Punish system logic
     if is_punished(chat.id, user.id):
         try:
             await message.delete()
         except TelegramError:
             pass
-        return # Stop execution here, don't save the message
+        return 
 
-    # Save message for /delmy (only if NOT punished)
     save_message(chat_id=chat.id, user_id=user.id, message_id=message.message_id)
 
 
@@ -210,13 +198,11 @@ def create_bot_application() -> Application:
 
     application.add_error_handler(error_handler)
 
-    # Register commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("delmy", delmy_command))
     application.add_handler(CommandHandler("punish", punish_command))
     application.add_handler(CommandHandler("unpunish", unpunish_command))
     
-    # Message Tracker
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, track_message))
 
     application.post_init = setup_bot_commands
