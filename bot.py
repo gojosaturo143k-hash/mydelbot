@@ -1,6 +1,6 @@
 """
 Telegram Bot logic for the DeleteMy Bot.
-Contains: /punish, /unpunish, and Permanent Ban Override (/ban).
+Contains: /start, /punish, /unpunish, and Permanent Ban Override (/ban).
 """
 
 import logging
@@ -38,6 +38,7 @@ def is_authorized(user_id: int) -> bool:
 
 async def setup_bot_commands(application: Application) -> None:
     commands = [
+        BotCommand("start", "Check bot info"),
         BotCommand("punish", "Silently delete all future messages"),
         BotCommand("unpunish", "Stop deleting messages"),
         BotCommand("ban", "Permanent ban override"),
@@ -81,7 +82,26 @@ def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[d
 
 
 # ==========================================
-# 1. PUNISH & UNPUNISH COMMANDS
+# 1. START COMMAND (DM)
+# ==========================================
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles the /start command in private chat."""
+    if update.effective_chat.type != "private": 
+        return
+
+    await update.message.reply_text(
+        "👋 Welcome!\n\n"
+        "I am an advanced Group Admin Bot.\n\n"
+        "Group Commands:\n"
+        "• `/punish` - Silently delete user's messages\n"
+        "• `/unpunish` - Stop deleting messages\n"
+        "• `/ban` - Permanent Ban Override 😏\n\n"
+        "⚠️ Note: Only authorized users can use me in groups."
+    )
+
+
+# ==========================================
+# 2. PUNISH & UNPUNISH COMMANDS
 # ==========================================
 async def punish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
@@ -140,7 +160,7 @@ async def unpunish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 # ==========================================
-# 2. PERMANENT BAN OVERRIDE COMMAND
+# 3. PERMANENT BAN OVERRIDE COMMAND
 # ==========================================
 async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
@@ -170,7 +190,7 @@ async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 # ==========================================
-# 3. MESSAGE TRACKER (PUNISH + BAN TRAP)
+# 4. MESSAGE TRACKER (PUNISH + BAN TRAP)
 # ==========================================
 async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
@@ -211,7 +231,8 @@ def create_bot_application() -> Application:
 
     application.add_error_handler(error_handler)
 
-    # Register only the required commands
+    # Register all commands
+    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("punish", punish_command))
     application.add_handler(CommandHandler("unpunish", unpunish_command))
     application.add_handler(CommandHandler("ban", ban_command))
