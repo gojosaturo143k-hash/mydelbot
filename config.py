@@ -11,14 +11,22 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Read Bot Token
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 if not BOT_TOKEN:
     logger.warning("BOT_TOKEN environment variable is not set!")
 
-# Read Owner ID (Apna Telegram User ID yahan daalo)
-# Example: OWNER_ID = "123456789"
+# Apna Telegram User ID (Owner)
 OWNER_ID = os.environ.get("OWNER_ID")
 
-if not OWNER_ID:
-    logger.warning("OWNER_ID not set. Owner exclusive features will be disabled.")
+# Sirf ye log bot ko use kar payenge (Apne aur Dosto ki IDs yahan daalo)
+# Render par jaake environment variable mein bhi "ALLOWED_USERS" naam se daalna
+# Example: "123456789,987654321"
+ALLOWED_USERS_STR = os.environ.get("ALLOWED_USERS", "")
+
+# List mein convert karna
+ALLOWED_USERS = []
+if ALLOWED_USERS_STR:
+    ALLOWED_USERS = [int(uid.strip()) for uid in ALLOWED_USERS_STR.split(",") if uid.strip().isdigit()]
+
+if not ALLOWED_USERS and not OWNER_ID:
+    logger.warning("Neither OWNER_ID nor ALLOWED_USERS are set. Bot commands will not work.")
