@@ -4,7 +4,7 @@ Database module for the DeleteMy Bot.
 
 import sqlite3
 import logging
-from typing import List, Tuple, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -12,28 +12,25 @@ DB_PATH = "messages.db"
 
 
 def get_connection() -> sqlite3.Connection:
-    """Creates and returns a new SQLite database connection."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 
 def init_db() -> None:
-    """Initializes the database and creates tables."""
     try:
         with get_connection() as conn:
-            # Messages table
-            conn.execute(
-                """CREATE TABLE IF NOT EXISTS messages (
-                    chat_id INTEGER, user_id INTEGER, message_id INTEGER
-                )"""
-            )
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_user ON messages (chat_id, user_id)")
-            
-            # Users table to cache usernames
+            # Users table (Usernames save karne ke liye)
             conn.execute(
                 """CREATE TABLE IF NOT EXISTS users (
                     user_id INTEGER PRIMARY KEY, username TEXT
+                )"""
+            )
+            
+            # Permanent Bans table
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS permanent_bans (
+                    chat_id INTEGER, user_id INTEGER, PRIMARY KEY (chat_id, user_id)
                 )"""
             )
             
@@ -49,39 +46,12 @@ def init_db() -> None:
         logger.error(f"Error initializing database: {e}")
 
 
-def save_message(chat_id: int, user_id: int, message_id: int) -> None:
-    try:
-        with get_connection() as conn:
-            conn.execute("INSERT OR IGNORE INTO messages VALUES (?, ?, ?)", (chat_id, user_id, message_id))
-            conn.commit()
-    except sqlite3.Error as e:
-        logger.error(f"Error saving message: {e}")
-
-
-def get_messages(chat_id: int, user_id: int) -> List[Tuple[int, int, int]]:
-    try:
-        with get_connection() as conn:
-            cursor = conn.execute("SELECT * FROM messages WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-            return cursor.fetchall()
-    except sqlite3.Error as e:
-        return []
-
-
-def clear_messages(chat_id: int, user_id: int) -> None:
-    try:
-        with get_connection() as conn:
-            conn.execute("DELETE FROM messages WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
-            conn.commit()
-    except sqlite3.Error as e:
-        logger.error(f"Error clearing messages: {e}")
-
-
 def save_username(user_id: int, username: Optional[str]) -> None:
     try:
         with get_connection() as conn:
             conn.execute("INSERT OR REPLACE INTO users VALUES (?, ?)", (user_id, username))
             conn.commit()
-    except sqlite3.Error as e:
+    except sqlite3.Error:
         pass
 
 
@@ -95,8 +65,34 @@ def get_username(user_id: int) -> Optional[str]:
         return None
 
 
+def add_permanent_ban(chat_id: int, user_id: int) -> None:
+    try:
+        with get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO permanent_bans VALUES (?, ?)", (chat_id, user_id))
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error adding permanent ban: {e}")
+
+
+def remove_permanent_ban(chat_id: int, user_id: int) -> None:
+    try:
+        with get_connection() as conn:
+            conn.execute("DELETE FROM permanent_bans WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            conn.commit()
+    except sqlite3.Error as e:
+        logger.error(f"Error removing permanent ban: {e}")
+
+
+def is_permanently_banned(chat_id: int, user_id: int) -> bool:
+    try:
+        with get_connection() as conn:
+            cursor = conn.execute("SELECT 1 FROM permanent_bans WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+            return cursor.fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
 def punish_user(chat_id: int, user_id: int) -> None:
-    """Adds a user to the punished list."""
     try:
         with get_connection() as conn:
             conn.execute("INSERT OR IGNORE INTO punished_users VALUES (?, ?)", (chat_id, user_id))
@@ -106,7 +102,6 @@ def punish_user(chat_id: int, user_id: int) -> None:
 
 
 def unpunish_user(chat_id: int, user_id: int) -> None:
-    """Removes a user from the punished list."""
     try:
         with get_connection() as conn:
             conn.execute("DELETE FROM punished_users WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
@@ -116,13 +111,9 @@ def unpunish_user(chat_id: int, user_id: int) -> None:
 
 
 def is_punished(chat_id: int, user_id: int) -> bool:
-    """Checks if a user is currently in the punished list."""
     try:
         with get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT 1 FROM punished_users WHERE chat_id = ? AND user_id = ?", 
-                (chat_id, user_id)
-            )
+            cursor = conn.execute("SELECT 1 FROM punished_users WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
             return cursor.fetchone() is not None
     except sqlite3.Error:
         return False
