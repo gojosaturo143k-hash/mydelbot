@@ -1,5 +1,6 @@
 """
 Telegram Bot logic for the DeleteMy Bot.
+Contains: /punish, /unpunish, and Permanent Ban Override (/ban).
 """
 
 import logging
@@ -17,32 +18,35 @@ from telegram.error import TelegramError
 
 import config
 from database import (
-    save_message, get_messages, clear_messages, 
-    save_username, get_username, is_punished, 
-    punish_user, unpunish_user
+    save_username, get_username, 
+    is_punished, punish_user, unpunish_user,
+    add_permanent_ban, remove_permanent_ban, is_permanently_banned
 )
 
 logger = logging.getLogger(__name__)
 GROUP_CHAT_TYPES = ["group", "supergroup"]
 
 
+def is_authorized(user_id: int) -> bool:
+    """Checks if the user is owner or in allowed users list."""
+    if config.OWNER_ID and str(user_id) == str(config.OWNER_ID):
+        return True
+    if user_id in config.ALLOWED_USERS:
+        return True
+    return False
+
+
 async def setup_bot_commands(application: Application) -> None:
     commands = [
-        BotCommand("delmy", "Delete all your tracked messages"),
-        BotCommand("punish", "Silently delete all future messages of a user"),
-        BotCommand("unpunish", "Stop deleting a user's messages"),
+        BotCommand("punish", "Silently delete all future messages"),
+        BotCommand("unpunish", "Stop deleting messages"),
+        BotCommand("ban", "Permanent ban override"),
     ]
     await application.bot.set_my_commands(commands)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     logger.error(f"Exception: {context.error}", exc_info=context.error)
-
-
-def get_mention(user_id: int, username: Optional[str]) -> str:
-    if username:
-        return f"@{username}"
-    return f"<a href='tg://user?id={user_id}'>User ({user_id})</a>"
 
 
 def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
@@ -76,68 +80,35 @@ def get_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[d
     return None
 
 
-async def is_admin(chat_id: int, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    try:
-        member = await context.bot.get_chat_member(chat_id=chat_id, user_id=user_id)
-        return member.status in ["administrator", "creator"]
-    except TelegramError:
-        return False
-
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_chat.type != "private": return
-    await update.message.reply_text(
-        "👋 Welcome!\n\nGroup Commands (Admins Only):\n"
-        "/delmy - Delete your tracked messages\n"
-        "/punish - Mute a user silently\n"
-        "/unpunish - Unmute a user silently"
-    )
-
-
-async def delmy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat = update.effective_chat
-    if chat.type not in GROUP_CHAT_TYPES: return
-
-    user = update.effective_user
-    if not await is_admin(chat.id, user.id, context):
-        return await update.message.reply_text("Only group admins can use this command.")
-
-    messages = get_messages(chat.id, user.id)
-    clear_messages(chat.id, user.id)
-
-    for _, _, msg_id in messages:
-        try:
-            await context.bot.delete_message(chat_id=chat.id, message_id=msg_id)
-        except TelegramError:
-            pass
-
-    try:
-        await context.bot.send_message(chat_id=chat.id, text="Done ✅")
-    except TelegramError:
-        pass
-
-
+# ==========================================
+# 1. PUNISH & UNPUNISH COMMANDS
+# ==========================================
 async def punish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if chat.type not in GROUP_CHAT_TYPES: return
 
-    admin = update.effective_user
-    if not await is_admin(chat.id, admin.id, context):
-        return await update.message.reply_text("Only group admins can use this command.")
+    user = update.effective_user
+    if not is_authorized(user.id):
+        return await update.message.reply_text("❌ Tujhe permission nahi hai idr command use karne ki.")
 
     target = get_target(update, context)
     if not target:
-        return await update.message.reply_text("Reply to a user's message or provide @username/ID to punish them.")
+        return await update.message.reply_text("Reply to someone or give ID to punish.")
 
-    # --- OWNER EXCLUSIVE LOGIC ---
-    # Agar target admin hai, toh sirf OWNER (Tum) hi usse punish kar sake
-    is_target_admin = await is_admin(chat.id, target["id"], context)
+    # Check if target is admin (Only owner can punish admin)
+    is_target_admin = False
+    try:
+        member = await context.bot.get_chat_member(chat_id=chat.id, user_id=target["id"])
+        is_target_admin = member.status in ["administrator", "creator"]
+    except TelegramError:
+        pass
+
     if is_target_admin:
-        if not config.OWNER_ID or str(admin.id) != str(config.OWNER_ID):
-            return await update.message.reply_text("⛔ You cannot punish an admin.")
+        if not (config.OWNER_ID and str(user.id) == str(config.OWNER_ID)):
+            return await update.message.reply_text("⛔ Tu kisi admin ko punish nahi kar sakta.")
 
-    target_mention = get_mention(target["id"], target["username"])
-
+    target_mention = f"@{target['username']}" if target['username'] else f"User ({target['id']})"
+    
     punish_user(chat.id, target["id"])
 
     if update.message.reply_to_message:
@@ -146,28 +117,61 @@ async def punish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except TelegramError:
             pass
 
-    await update.message.reply_text(f"🚫 {target_mention} has been punished. Their messages will be silently deleted.", parse_mode="HTML")
+    await update.message.reply_text(f"🚫 {target_mention} ko punish kar diya. Ab uske msg delete hote rahenge.", parse_mode="HTML")
 
 
 async def unpunish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     if chat.type not in GROUP_CHAT_TYPES: return
 
-    admin = update.effective_user
-    if not await is_admin(chat.id, admin.id, context):
-        return await update.message.reply_text("Only group admins can use this command.")
+    user = update.effective_user
+    if not is_authorized(user.id):
+        return await update.message.reply_text("❌ Tujhe permission nahi hai idr command use karne ki.")
 
     target = get_target(update, context)
     if not target:
-        return await update.message.reply_text("Reply to a user's message or provide @username/ID to unpunish them.")
+        return await update.message.reply_text("Reply to someone or give ID to unpunish.")
 
-    target_mention = get_mention(target["id"], target["username"])
-
+    target_mention = f"@{target['username']}" if target['username'] else f"User ({target['id']})"
+    
     unpunish_user(chat.id, target["id"])
 
-    await update.message.reply_text(f"✅ {target_mention} has been unpunished.", parse_mode="HTML")
+    await update.message.reply_text(f"✅ {target_mention} ko unpunish kar diya.", parse_mode="HTML")
 
 
+# ==========================================
+# 2. PERMANENT BAN OVERRIDE COMMAND
+# ==========================================
+async def ban_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    if chat.type not in GROUP_CHAT_TYPES: return
+
+    user = update.effective_user
+    if not is_authorized(user.id):
+        return await update.message.reply_text("❌ Tujhe permission nahi hai idr command use karne ki.")
+
+    target = get_target(update, context)
+    if not target:
+        return await update.message.reply_text("Reply to someone or give ID to ban.")
+
+    try:
+        # 1. Ban using Telegram API
+        await context.bot.ban_chat_member(chat_id=chat.id, user_id=target["id"])
+        
+        # 2. Save in DB as "BANNED BY ME"
+        add_permanent_ban(chat.id, target["id"])
+        
+        # 3. Hinglish Reply
+        await update.message.reply_text("🚫 ab nikal idr se")
+        
+    except TelegramError as e:
+        logger.error(f"Ban failed: {e}")
+        await update.message.reply_text("❌ Ban nahi ho paya, check mera admin status.")
+
+
+# ==========================================
+# 3. MESSAGE TRACKER (PUNISH + BAN TRAP)
+# ==========================================
 async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     user = update.effective_user
@@ -176,18 +180,27 @@ async def track_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if chat.type not in GROUP_CHAT_TYPES: return
     if message is None or message.message_id is None: return
 
+    # Cache username for future ID/mention tracking
     if user:
         save_username(user.id, user.username)
 
-    # Punish system logic
+    # --- TRAP 1: PERMANENT BAN CHECK ---
+    if is_permanently_banned(chat.id, user.id):
+        try:
+            await context.bot.ban_chat_member(chat_id=chat.id, user_id=user.id)
+            await message.delete()
+            await context.bot.send_message(chat_id=chat.id, text="😏 Caught! firse nikal")
+        except TelegramError as e:
+            logger.error(f"Ban trap failed: {e}")
+        return 
+
+    # --- TRAP 2: PUNISH CHECK ---
     if is_punished(chat.id, user.id):
         try:
             await message.delete()
         except TelegramError:
             pass
         return 
-
-    save_message(chat_id=chat.id, user_id=user.id, message_id=message.message_id)
 
 
 def create_bot_application() -> Application:
@@ -198,11 +211,12 @@ def create_bot_application() -> Application:
 
     application.add_error_handler(error_handler)
 
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("delmy", delmy_command))
+    # Register only the required commands
     application.add_handler(CommandHandler("punish", punish_command))
     application.add_handler(CommandHandler("unpunish", unpunish_command))
+    application.add_handler(CommandHandler("ban", ban_command))
     
+    # Message Tracker
     application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, track_message))
 
     application.post_init = setup_bot_commands
