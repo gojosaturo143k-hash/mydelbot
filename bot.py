@@ -137,7 +137,7 @@ async def punish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except TelegramError:
             pass
 
-    await update.message.reply_text(f"🚫 {target_mention} ko punish kar diya. Ab uske msg delete hote rahenge.", parse_mode="HTML")
+    await update.message.reply_text(f"🚫 {target_mention} CHUDGYA.", parse_mode="HTML")
 
 
 async def unpunish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -146,7 +146,7 @@ async def unpunish_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     user = update.effective_user
     if not is_authorized(user.id):
-        return await update.message.reply_text("❌ Tujhe permission nahi hai idr command use karne ki.")
+        return await update.message.reply_text("❌ Teri Aukaat nahi hai idr command use karne ki.")
 
     target = get_target(update, context)
     if not target:
